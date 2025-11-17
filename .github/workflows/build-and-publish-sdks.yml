@@ -18,55 +18,13 @@ jobs:
       - name: Checkout private repo
         uses: actions/checkout@v4
 
-      - name: Prepare artifacts folder
+      - name: Prepare artifacts
         run: |
           rm -rf artifacts
-          mkdir -p artifacts/ios artifacts/android artifacts/unity artifacts/react
+          mkdir -p artifacts/android artifacts/ios artifacts/unity artifacts/react
 
       ###########################################################
-      # 1. iOS XCFRAMEWORK BUILD
-      ###########################################################
-      - name: Build iOS XCFramework (device)
-        run: |
-          set -e
-          cd ios/AppFig
-          xcodebuild \
-            -project AppFig.xcodeproj \
-            -scheme AppFig \
-            -sdk iphoneos \
-            -configuration Release \
-            -archivePath build/ios_devices.xcarchive \
-            SKIP_INSTALL=NO \
-            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-            archive
-
-      - name: Build iOS XCFramework (simulator)
-        run: |
-          set -e
-          cd ios/AppFig
-          xcodebuild \
-            -project AppFig.xcodeproj \
-            -scheme AppFig \
-            -sdk iphonesimulator \
-            -configuration Release \
-            -archivePath build/ios_simulator.xcarchive \
-            SKIP_INSTALL=NO \
-            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-            archive
-
-      - name: Create XCFramework
-        run: |
-          set -e
-          cd ios/AppFig
-          xcodebuild -create-xcframework \
-            -framework build/ios_devices.xcarchive/Products/Library/Frameworks/AppFig.framework \
-            -framework build/ios_simulator.xcarchive/Products/Library/Frameworks/AppFig.framework \
-            -output AppFig.xcframework
-
-          cp -R AppFig.xcframework ../../artifacts/ios/
-
-      ###########################################################
-      # 2. ANDROID AAR BUILD
+      # 1. ANDROID AAR BUILD (ANDROID FIRST)
       ###########################################################
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -81,12 +39,60 @@ jobs:
           chmod +x ./gradlew
           ./gradlew clean assembleRelease
 
-          AAR="build/outputs/aar/project-release.aar"
-          if [ ! -f "$AAR" ]; then
-            echo "AAR not found"; exit 1;
+          echo "Searching for .aar output..."
+          AAR=$(find build -name "*.aar" | head -n 1)
+
+          if [ -z "$AAR" ]; then
+            echo "ERROR: No AAR found."
+            echo "Listing build folder:"
+            find build -type f
+            exit 1
           fi
 
+          echo "Found AAR: $AAR"
           cp "$AAR" ../../artifacts/android/AppFigAndroidSDK.aar
+
+      ###########################################################
+      # 2. iOS XCFRAMEWORK BUILD
+      ###########################################################
+      - name: Build iOS (Device)
+        run: |
+          set -e
+          cd ios/AppFig
+          xcodebuild \
+            -project AppFig.xcodeproj \
+            -scheme AppFig \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath build/ios_devices.xcarchive \
+            SKIP_INSTALL=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            archive
+
+      - name: Build iOS (Simulator)
+        run: |
+          set -e
+          cd ios/AppFig
+          xcodebuild \
+            -project AppFig.xcodeproj \
+            -scheme AppFig \
+            -sdk iphonesimulator \
+            -configuration Release \
+            -archivePath build/ios_simulator.xcarchive \
+            SKIP_INSTALL=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            archive
+
+      - name: Create iOS XCFramework
+        run: |
+          set -e
+          cd ios/AppFig
+          xcodebuild -create-xcframework \
+            -framework build/ios_devices.xcarchive/Products/Library/Frameworks/AppFig.framework \
+            -framework build/ios_simulator.xcarchive/Products/Library/Frameworks/AppFig.framework \
+            -output AppFig.xcframework
+
+          cp -R AppFig.xcframework ../../artifacts/ios/
 
       ###########################################################
       # 3. UNITY (COPY DLL)
@@ -95,12 +101,13 @@ jobs:
         run: |
           set -e
           if [ ! -f unity/AppFigUnitySDK.dll ]; then
-            echo "ERROR: unity/AppFigUnitySDK.dll not found"; exit 1;
+            echo "ERROR: unity/AppFigUnitySDK.dll not found"
+            exit 1
           fi
           cp unity/AppFigUnitySDK.dll artifacts/unity/
 
       ###########################################################
-      # 4. REACT (COPY RAW TS SDK)
+      # 4. REACT (COPY TS FILE)
       ###########################################################
       - name: Copy React SDK
         run: |
@@ -117,34 +124,36 @@ jobs:
       ###########################################################
       # 6. PUBLISH ARTIFACTS
       ###########################################################
-      - name: Replace contents
+      - name: Publish artifacts to public repo
         run: |
           set -e
           cd public-repo
 
           find . -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
 
-          mkdir -p ios android unity react
+          mkdir -p android ios unity react
 
-          cp -R ../artifacts/ios/* ios/
           cp -R ../artifacts/android/* android/
+          cp -R ../artifacts/ios/* ios/
           cp -R ../artifacts/unity/* unity/
           cp -R ../artifacts/react/* react/
 
           echo "AppFig SDKs" > README.md
           echo "" >> README.md
-          echo "Auto-published artifacts from AppFig-SDKs-private." >> README.md
+          echo "Auto-generated SDK artifacts from AppFig-SDKs-private." >> README.md
 
-      - name: Commit and push
+      - name: Commit & Push
         run: |
+          set -e
           cd public-repo
+
           git config user.name "AppFig SDK Bot"
           git config user.email "sdk-bot@appfig.com"
 
           git add .
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No changes to publish."
           else
-            git commit -m "Publish latest AppFig SDK build"
+            git commit -m "Publish latest AppFig SDK artifacts"
             git push origin ${{ env.PUBLIC_BRANCH }}
           fi
