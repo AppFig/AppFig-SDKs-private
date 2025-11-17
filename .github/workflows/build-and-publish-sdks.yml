@@ -31,11 +31,11 @@ jobs:
           VERSION=$(cat VERSION | tr -d '[:space:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      ############################################
-      # REACT SDK BUILD (robust, safe)
-      ############################################
+      #######################################################
+      # REACT SDK BUILD (TS → bundled/minified JS)
+      #######################################################
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -43,60 +43,107 @@ jobs:
       - name: Build React SDK
         run: |
           set -e
-
-          echo "Cleaning build directories..."
           rm -rf artifacts/react
           rm -rf ci-react-build
           mkdir -p artifacts/react
           mkdir -p ci-react-build
 
-          echo "Initializing temporary npm project..."
           cd ci-react-build
-          npm init -y || { echo "npm init failed"; exit 1; }
+          npm init -y
+          npm install esbuild typescript
 
-          echo "Installing build dependencies..."
-          npm install typescript esbuild || { echo "npm install failed"; exit 1; }
-
-          echo "Running esbuild..."
           npx esbuild ../react/AppFigReactSDK.ts \
             --bundle \
             --minify \
             --platform=neutral \
             --format=esm \
-            --outfile=../artifacts/react/AppFigReactSDK.min.js \
-            || { echo "esbuild failed"; exit 1; }
+            --outfile=../artifacts/react/AppFigReactSDK.min.js
 
-          echo "Creating index.d.ts..."
           echo "declare const AppFig: any;" > ../artifacts/react/index.d.ts
           echo "export default AppFig;" >> ../artifacts/react/index.d.ts
 
-          echo "React build completed."
+      #######################################################
+      # UNITY BUILD (.cs → .dll using dotnet)
+      #######################################################
 
-      ############################################
-      # UNITY / IOS / ANDROID (temporary copies)
-      ############################################
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
-      - name: Prepare Unity iOS Android artifacts
+      - name: Build Unity DLL
         run: |
           set -e
-
-          rm -rf artifacts/unity artifacts/ios artifacts/android
+          rm -rf artifacts/unity
           mkdir -p artifacts/unity
-          mkdir -p artifacts/ios
+
+          dotnet build unity/project/AppFigUnitySDK.csproj -c Release
+
+          OUT="unity/project/bin/Release/netstandard2.0/AppFig.dll"
+          if [ ! -f "$OUT" ]; then
+            echo "Unity DLL not found"; exit 1;
+          fi
+
+          cp "$OUT" artifacts/unity/AppFig.dll
+
+      #######################################################
+      # ANDROID BUILD (Kotlin → AAR with Gradle)
+      #######################################################
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build Android AAR
+        run: |
+          set -e
+          rm -rf artifacts/android
           mkdir -p artifacts/android
 
-          cp unity/AppFigUnitySDK.cs artifacts/unity/AppFigUnitySDK.cs
-          cp ios/AppFigiOSSDK.swift artifacts/ios/AppFigiOSSDK.swift
-          cp android/AppFigAndroidSDK.kt artifacts/android/AppFigAndroidSDK.kt
+          cd android/project
+          ./gradlew assembleRelease
 
-      ############################################
-      # CLONE PUBLIC REPO
-      ############################################
+          AAR="build/outputs/aar/project-release.aar"
+          if [ ! -f "$AAR" ]; then
+            echo "Android AAR not found"; exit 1;
+          fi
+
+          cp "$AAR" ../../artifacts/android/appfig-release.aar
+
+      #######################################################
+      # iOS BUILD (SwiftPM → XCFramework)
+      #######################################################
+
+      - name: Build iOS XCFramework
+        run: |
+          set -e
+          rm -rf artifacts/ios
+          mkdir -p artifacts/ios
+
+          cd ios/project
+
+          swift build -c release
+
+          PRODUCT=".build/apple/Products/Release/AppFig.framework"
+          if [ ! -d "$PRODUCT" ]; then
+            echo "Swift build failed"; exit 1;
+          fi
+
+          xcodebuild -create-xcframework \
+            -framework "$PRODUCT" \
+            -output AppFig.xcframework
+
+          cp -R AppFig.xcframework ../../artifacts/ios/
+
+      #######################################################
+      # CLONE PUBLIC REPO AND REPLACE CONTENTS
+      #######################################################
 
       - name: Clone public repo
         run: |
           set -e
-
           git clone \
             https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ env.PUBLIC_REPO }}.git \
             public-repo
@@ -117,13 +164,11 @@ jobs:
 
           echo "${{ steps.version.outputs.version }}" > VERSION
 
-          if [ ! -f README.md ]; then
-            echo "AppFig SDKs" > README.md
-            echo "" >> README.md
-            echo "Auto-generated from AppFig-SDKs-private." >> README.md
-            echo "Contains packaged SDK artifacts for Unity, React, iOS, Android." >> README.md
-            echo "Do not edit manually." >> README.md
-          fi
+          echo "AppFig SDKs" > README.md
+          echo "" >> README.md
+          echo "Auto-generated from AppFig-SDKs-private." >> README.md
+          echo "Contains packaged SDK artifacts for Unity, React, iOS, and Android." >> README.md
+          echo "Do not edit manually." >> README.md
 
       - name: Commit and push artifacts
         run: |
@@ -145,7 +190,6 @@ jobs:
         run: |
           set -e
           cd public-repo
-
           VERSION="${{ steps.version.outputs.version }}"
 
           if git rev-parse "v$VERSION" >/dev/null 2>&1; then
