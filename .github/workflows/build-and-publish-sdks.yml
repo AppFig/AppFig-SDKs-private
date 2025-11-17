@@ -87,6 +87,17 @@ jobs:
             -output AppFig.xcframework
           cp -R AppFig.xcframework ../../artifacts/ios/
 
+      # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+      # ADD ZIP CREATION HERE — ONLY CHANGE REQUESTED
+      # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+      - name: Zip iOS XCFramework
+        run: |
+          set -e
+          cd ios/AppFig
+          zip -r AppFig.xcframework.zip AppFig.xcframework
+          cp AppFig.xcframework.zip ../../artifacts/ios/
+      # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
       ###########################################################
       # 3. UNITY — COPY ALL FILES BEGINNING WITH AppFig*
       ###########################################################
@@ -141,7 +152,7 @@ jobs:
       ###########################################################
       - name: Clone public repo
         run: |
-          git clone https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ env.PUBLIC_REPO }}.git public-repo
+            git clone https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ env.PUBLIC_REPO }}.git public-repo
 
       ###########################################################
       # 6. PUBLISH ARTIFACTS
