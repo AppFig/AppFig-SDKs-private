@@ -32,7 +32,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       #######################################################
-      # REACT BUILD (TS → minified JS)
+      # REACT BUILD (TS → bundled + minified JS)
       #######################################################
 
       - name: Setup Node
@@ -63,7 +63,7 @@ jobs:
           echo "export default AppFig;" >> ../artifacts/react/index.d.ts
 
       #######################################################
-      # UNITY SDK — COPY DLL YOU PROVIDE
+      # UNITY DLL — COPY ONLY
       #######################################################
 
       - name: Prepare Unity DLL artifact
@@ -74,7 +74,7 @@ jobs:
 
           DLL="unity/AppFigUnitySDK.dll"
           if [ ! -f "$DLL" ]; then
-            echo "ERROR: unity/AppFigUnitySDK.dll not found. Upload a compiled DLL to unity/ first."
+            echo "ERROR: unity/AppFigUnitySDK.dll not found. Upload your DLL to unity/ first."
             exit 1
           fi
 
@@ -99,12 +99,16 @@ jobs:
           cd android/project
           ./gradlew assembleRelease
 
-          AAR="build/outputs/aar/project-release.aar"
-          if [ ! -f "$AAR" ]; then
-            echo "Android AAR not found"; exit 1;
+          AAR_FILE=$(find build/outputs/aar -name "*release.aar" | head -n 1)
+
+          if [ -z "$AAR_FILE" ]; then
+            echo "Android AAR not found in build/outputs/aar"
+            ls -R build/outputs/aar
+            exit 1
           fi
 
-          cp "$AAR" ../../artifacts/android/appfig-release.aar
+          echo "Found AAR: $AAR_FILE"
+          cp "$AAR_FILE" ../../artifacts/android/appfig-release.aar
 
       #######################################################
       # iOS BUILD (SwiftPM → XCFramework)
@@ -121,7 +125,8 @@ jobs:
 
           PRODUCT=".build/apple/Products/Release/AppFig.framework"
           if [ ! -d "$PRODUCT" ]; then
-            echo "Swift build failed"; exit 1;
+            echo "Swift build failed (AppFig.framework not found)"
+            exit 1
           fi
 
           xcodebuild -create-xcframework \
