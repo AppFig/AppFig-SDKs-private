@@ -1,0 +1,179 @@
+name: Build and publish AppFig SDKs
+
+on:
+  workflow_dispatch:        # manual trigger
+  push:
+    branches:
+      - main                # or whatever your default branch is
+    paths:
+      - "unity/**"
+      - "react/**"
+      - "ios/**"
+      - "android/**"
+      - "VERSION"
+      - ".github/workflows/build-and-publish-sdks.yml"
+
+env:
+  PUBLIC_REPO: AppFig/AppFig-SDKs
+  PUBLIC_REPO_BRANCH: main
+
+jobs:
+  build-and-publish:
+    runs-on: macos-latest   # macOS so you can later add real iOS/Android builds
+
+    steps:
+      - name: Checkout private repo (raw SDKs)
+        uses: actions/checkout@v4
+
+      - name: Read VERSION
+        id: version
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "VERSION=$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      #############################
+      # Build / package REACT SDK
+      #############################
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build React SDK from single TS file
+        run: |
+          set -e
+
+          mkdir -p artifacts/react
+
+          # Install local tooling in a temp dir
+          mkdir -p .ci-react-build
+          cd .ci-react-build
+
+          npm init -y >/dev/null 2>&1
+          npm install typescript esbuild >/dev/null 2>&1
+
+          # Compile and bundle AppFigReactSDK.ts
+          npx esbuild ../react/AppFigReactSDK.ts \
+            --bundle \
+            --minify \
+            --platform=neutral \
+            --format=esm \
+            --outfile=../artifacts/react/AppFigReactSDK.min.js
+
+          # Optionally emit a .d.ts stub (since you only have a single file)
+          cat << 'EOF' > ../artifacts/react/index.d.ts
+// Minimal type stub for AppFig React SDK.
+// Fill in proper types later as needed.
+declare const AppFig: any;
+export default AppFig;
+EOF
+
+      ###########################################
+      # TEMP: Handle Unity / iOS / Android SDKs
+      ###########################################
+      # NOTE:
+      # - Proper DLL / XCFramework / AAR builds require minimal project metadata.
+      # - From a single .cs/.swift/.kt file with no project, CI cannot realistically
+      #   generate true binary artifacts. Until you add tiny wrapper projects,
+      #   this step will *copy* the raw files as "packaged" outputs.
+      # - That means source is still visible for those three SDKs for now.
+      # - Once you have small projects, you can replace the copy logic with:
+      #   - dotnet build -> DLL
+      #   - xcodebuild   -> XCFramework
+      #   - gradle       -> AAR
+
+      - name: Prepare Unity/iOS/Android artifacts (currently raw copies)
+        run: |
+          set -e
+          mkdir -p artifacts/unity
+          mkdir -p artifacts/ios
+          mkdir -p artifacts/android
+
+          # Unity: copy raw C# SDK for now
+          cp unity/AppFigUnitySDK.cs artifacts/unity/AppFigUnitySDK.cs
+
+          # iOS: copy raw Swift SDK for now
+          cp ios/AppFigiOSSDK.swift artifacts/ios/AppFigiOSSDK.swift
+
+          # Android: copy raw Kotlin SDK for now
+          cp android/AppFigAndroidSDK.kt artifacts/android/AppFigAndroidSDK.kt
+
+      ###########################
+      # Clone public repo (artifacts-only)
+      ###########################
+
+      - name: Clone public SDK artifacts repo
+        run: |
+          set -e
+          git clone \
+            https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ env.PUBLIC_REPO }}.git \
+            public-repo
+
+      - name: Replace contents of public repo with new artifacts
+        run: |
+          set -e
+          cd public-repo
+
+          # Remove everything except .git
+          find . -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
+
+          # Recreate structure
+          mkdir -p unity react ios android
+
+          # Copy artifacts from build step
+          cp -R ../artifacts/unity/* unity/
+          cp -R ../artifacts/react/* react/
+          cp -R ../artifacts/ios/* ios/
+          cp -R ../artifacts/android/* android/
+
+          # Write VERSION + root README if missing
+          echo "${{ steps.version.outputs.version }}" > VERSION
+
+          if [ ! -f README.md ]; then
+            cat << 'EOF' > README.md
+# AppFig SDKs
+
+This repository is auto-generated from the private AppFig-SDKs-private repo.
+
+It contains packaged SDK artifacts for:
+- Unity
+- React
+- iOS
+- Android
+
+Source code is private. Do not edit this repo manually.
+EOF
+          fi
+
+      - name: Commit and push artifacts to public repo
+        run: |
+          set -e
+          cd public-repo
+
+          git config user.name "AppFig SDK Bot"
+          git config user.email "sdk-bot@appfig.com"
+
+          git add .
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Publish SDK artifacts v${{ steps.version.outputs.version }}"
+            git push origin ${{ env.PUBLIC_REPO_BRANCH }}
+          fi
+
+      - name: Tag public repo with version
+        run: |
+          set -e
+          cd public-repo
+
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Create or move lightweight tag
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            git tag -d "v$VERSION"
+          fi
+
+          git tag "v$VERSION"
+          git push origin "v$VERSION" --force
