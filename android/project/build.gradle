@@ -1,16 +1,7 @@
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.2.2'
-        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
-    }
+plugins {
+    id "com.android.library"
+    id "org.jetbrains.kotlin.android"
 }
-
-apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
 
 android {
     namespace "com.appfig.sdk"
@@ -18,22 +9,27 @@ android {
 
     defaultConfig {
         minSdk 21
-    }
+        targetSdk 34
 
-    // Align Java + Kotlin to JVM 17
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
+        consumerProguardFiles "consumer-rules.pro"
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            shrinkResources false
         }
+    }
+
+    packagingOptions {
+        pickFirst "**/*.jar"
+        pickFirst "**/*.kotlin_metadata"
+        pickFirst "**/*.kotlin_module"
+    }
+
+    // Required for Kotlin 17 toolchain consistency
+    kotlinOptions {
+        jvmTarget = "17"
     }
 }
 
@@ -42,16 +38,58 @@ repositories {
     mavenCentral()
 }
 
+//
+// --- F A T   A A R   C O N F I G -----------------------------
+// Everything added to `embed` will be packed INSIDE the AAR
+//
+configurations {
+    embed
+    implementation.extendsFrom(embed)
+}
+
 dependencies {
-    // Gson JSON parser
-    implementation "com.google.code.gson:gson:2.10.1"
+    // SDK code dependencies (will be embedded inside AAR)
+    embed "com.squareup.okhttp3:okhttp:4.12.0"
+    embed "com.google.code.gson:gson:2.10.1"
 
-    // OkHttp HTTP client
-    implementation "com.squareup.okhttp3:okhttp:4.11.0"
-
-    // Okio (OkHttp dependency)
-    implementation "com.squareup.okio:okio:3.5.0"
-
-    // Kotlin standard library
+    // For your Kotlin SDK code
     implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"
+}
+
+//
+// --- MERGE EMBEDDED JARS INTO THE AAR -------------------------
+// Ensures OkHttp & Gson jars are physically included inside AAR
+//
+afterEvaluate {
+    tasks.withType(com.android.build.gradle.tasks.BundleAar).configureEach { task ->
+        task.doLast {
+            def outDir = task.archiveFile.get().asFile.parentFile
+            def aarFile = task.archiveFile.get().asFile
+
+            // Unzip AAR into temp dir
+            def tempDir = new File(outDir, "tempAar")
+            if (tempDir.exists()) tempDir.deleteDir()
+            tempDir.mkdirs()
+            copy {
+                from zipTree(aarFile)
+                into tempDir
+            }
+
+            // Copy embedded jars into /libs inside AAR
+            new File(tempDir, "libs").mkdirs()
+            configurations.embed.each { file ->
+                if (!file.isDirectory()) {
+                    copy {
+                        from file
+                        into new File(tempDir, "libs")
+                    }
+                }
+            }
+
+            // Repack AAR
+            aarFile.delete()
+            ant.zip(destfile: aarFile, basedir: tempDir)
+            tempDir.deleteDir()
+        }
+    }
 }
